@@ -1,0 +1,45 @@
+# ----------------------------------------------------------------------
+# ShiftLeft .gitignore
+# ----------------------------------------------------------------------
+
+# 1. Security & Environment (CRITICAL)
+.env
+.env.*
+*.env
+*.pem
+*.key
+# Ignore all JSON files in the root just in case you drop your GCP key there
+*.json
+!requirements.json
+!package.json
+
+# 2. Python & Virtual Environments
+venv/
+env/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 3. LangGraph & LangChain specific
+.langchain.db
+tracing.log
+
+# 4. OS & Editor generated files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 5. Testing & Cloud Run artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+Dockerfile.*
+.dockerignore
+
+# 6. Streamlit (HITL UI)
+.streamlit/

@@ -1,0 +1,12 @@
+
+langgraph
+langchain-google-vertexai
+pydantic
+google-cloud-aiplatform
+google-cloud-run
+docker
+pytest
+streamlit
+crawl4ai
+beautifulsoup4
+EOT
