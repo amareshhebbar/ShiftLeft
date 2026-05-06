@@ -10,3 +10,6 @@ streamlit
 crawl4ai
 beautifulsoup4
 EOT
+langchain-google-genai
+
+python-dotenv
