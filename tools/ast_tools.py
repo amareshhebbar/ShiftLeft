@@ -6,7 +6,6 @@ def generate_function_map(directory_path: str = ".") -> dict:
     repo_map = {}
     
     for root, _, files in os.walk(directory_path):
-        # Ignore virtual environments, hidden folders, and cache
         if 'venv' in root or '/.' in root or '__pycache__' in root:
             continue
             
@@ -18,7 +17,6 @@ def generate_function_map(directory_path: str = ".") -> dict:
                         file_content = f.read()
                         node = ast.parse(file_content)
                     
-                    # Extract function and class names
                     functions = [n.name for n in ast.walk(node) if isinstance(n, ast.FunctionDef)]
                     classes = [n.name for n in ast.walk(node) if isinstance(n, ast.ClassDef)]
                     

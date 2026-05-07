@@ -2,25 +2,9 @@ from langgraph.graph import StateGraph, START, END
 from core.state import ShiftLeftState
 from agents.triage import triage_node
 from agents.cartographer import cartographer_node
-
-
-def coder_node(state: ShiftLeftState):
-    print("\033[94m[Coder Agent] Drafting fix and unit tests...\033[0m")
-    return {"current_code": "def fix(): return True", "agent_messages": ["Code written."]}
-
-def sandbox_node(state: ShiftLeftState):
-    print("\033[93m[Sandbox Auditor] Executing code in isolated container...\033[0m")
-    passed = bool(state.get("current_code"))
-    if passed:
-        print("\033[92m[Sandbox Auditor] Tests passed.\033[0m")
-    else:
-        print("\033[91m[Sandbox Auditor] Tests failed. Routing back to Coder.\033[0m")
-        
-    return {"tests_passed": passed, "agent_messages": [f"Tests passed: {passed}"]}
-
-def hitl_node(state: ShiftLeftState):
-    print("\033[95m[HITL Lead] Halting execution. Preparing PR for human review...\033[0m")
-    return {"requires_human": True, "agent_messages": ["Awaiting human approval."]}
+from agents.coder import coder_node
+from agents.auditor import sandbox_node
+from agents.hitl import hitl_node
 
 def route_sandbox_results(state: ShiftLeftState):
     """The Self-Correction Loop"""
