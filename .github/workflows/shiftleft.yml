@@ -1,0 +1,17 @@
+# .github/workflows/shiftleft.yml
+name: ShiftLeft scheduled check
+
+on:
+  schedule:
+    - cron: "0 2 * * *"     # 2 AM UTC every day
+  workflow_dispatch:          # allows manual trigger from GitHub UI
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping ShiftLeft webhook
+        run: |
+          curl -s -X POST "${{ secrets.SHIFTLEFT_WEBHOOK_URL }}/webhook/scheduler" \
+            -H "Content-Type: application/json" \
+            -d '{"source": "github-actions"}'

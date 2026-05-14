@@ -1,71 +1,117 @@
+"""
+Coder agent — generates patches for the files identified by triage.
+Uses Gemini's full context window to read the target files in their
+entirety and produce corrected versions.
+"""
+
 import os
+import json
 import re
-from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage
 
-from core.state import ShiftLeftState
-from utils.config import get_llm
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from core.state import ShiftLeftState, PatchFile
+from utils.config import GEMINI_API_KEY, GEMINI_MODEL
+from utils.logger import get_logger
 
-load_dotenv()
+log = get_logger(__name__)
 
-gemini_model = os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
+_llm = ChatGoogleGenerativeAI(
+    model=GEMINI_MODEL,
+    google_api_key=GEMINI_API_KEY,
+    temperature=0.15,
+)
 
-def extract_code(text: str) -> str:
-    """Helper function to strip markdown formatting and return pure Python code."""
-    pattern = r"```(?:python)?\s*(.*?)\s*```"
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return text.strip()
+SYSTEM = """You are an expert Python engineer performing automated code repair.
+You will receive:
+  1. A description of the issue to fix.
+  2. The full content of one or more files that need to be patched.
+  3. (On retry) the test output from the previous attempt and what went wrong.
 
-def coder_node(state: ShiftLeftState):
-    print("\033[94m[Coder Agent] Engaging main engine...\033[0m")
-    
-    llm = get_llm(model_name=gemini_model, temperature=0)
-    error_logs = state.get("error_logs", "")
-    is_retry = bool(error_logs)
-    
-    if is_retry:
-        print("\033[93m[Coder Agent] Processing Sandbox failure logs. Rewriting code...\033[0m")
-        action_message = "Attempting to fix previous test failure."
-    else:
-        print("\033[94m[Coder Agent] Drafting initial fix and unit tests...\033[0m")
-        action_message = "Drafted initial code fix."
+Produce corrected versions of the files.
 
-    system_prompt = """
-    You are the Lead Developer Agent for an autonomous bug-fixing system.
-    Your job is to read a GitHub issue, understand the codebase architecture, and write the Python code to fix the bug.
-    
-    CRITICAL CONSTRAINTS:
-    1. Output ONLY valid, executable Python code. 
-    2. Do NOT include explanations, greetings, or pleasantries.
-    3. Include both the fixed functions AND a simple unit test (using pytest or standard assert) at the bottom of the script to verify the fix.
-    """
-    
-    if is_retry:
-        system_prompt += f"""
-        WARNING: Your previous code failed the Sandbox Test. 
-        Here is the error traceback:
-        {error_logs}
-        
-        Analyze the error and rewrite the code to fix it.
-        """
+Respond ONLY with a JSON array. Each element must match this schema exactly:
+[
+  {
+    "filename": "agents/coder.py",
+    "content":  "<complete new file content as a string>",
+    "reason":   "one-line explanation of what was changed"
+  }
+]
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "Issue Details: {issue_text}\n\nRepository Architecture: {repo_map}")
+Rules:
+- Return the COMPLETE file content, not a diff.
+- Do not truncate or abbreviate any code.
+- Preserve all existing imports unless they are part of the bug.
+- Do not add any text outside the JSON array.
+- If a file does not need changes, do not include it in the response."""
+
+
+def _read_file(repo_local_path: str, rel_path: str) -> str:
+    abs_path = os.path.join(repo_local_path, rel_path)
+    if not os.path.exists(abs_path):
+        return f"# File not found: {rel_path}"
+    with open(abs_path, "r", errors="replace") as f:
+        return f.read()
+
+
+def _build_prompt(state: ShiftLeftState) -> str:
+    issue     = state.get("issue_summary", "")
+    targets   = state.get("target_files", [])
+    repo_path = state.get("repo_local_path", "")
+    iteration = state.get("iteration", 0)
+    previous  = state.get("test_results", {})
+
+    parts = [f"Issue to fix:\n{issue}\n"]
+
+    if iteration > 0 and previous:
+        parts.append(
+            f"Previous attempt failed (iteration {iteration}).\n"
+            f"Test output:\n{previous.get('output', '')}\n"
+            "Analyse the failures and produce a corrected patch.\n"
+        )
+
+    for rel_path in targets[:5]:   # cap at 5 files per run
+        content = _read_file(repo_path, rel_path)
+        parts.append(f"File: {rel_path}\n```python\n{content}\n```")
+
+    return "\n\n".join(parts)
+
+
+def coder_node(state: ShiftLeftState) -> ShiftLeftState:
+    iteration = state.get("iteration", 0) + 1
+    log.info(f"[coder] iteration {iteration}, "
+             f"targets={state.get('target_files', [])}")
+
+    prompt   = _build_prompt(state)
+    response = _llm.invoke([
+        SystemMessage(content=SYSTEM),
+        HumanMessage(content=prompt),
     ])
-    
-    chain = prompt | llm | StrOutputParser()
-    raw_response = chain.invoke({
-        "issue_text": state["issue_text"],
-        "repo_map": str(state["repo_map"])
-    })
-    executable_code = extract_code(raw_response)
-    
-    print("\033[94m[Coder Agent] Code generation complete.\033[0m")
+
+    raw = response.content
+    # strip markdown code fences if present
+    raw = re.sub(r"```(?:json)?|```", "", raw).strip()
+
+    try:
+        patches_raw = json.loads(raw)
+    except json.JSONDecodeError as e:
+        log.error(f"[coder] JSON parse failed: {e}\nRaw:\n{raw[:500]}")
+        # Return an empty patch list — auditor will report failure
+        patches_raw = []
+
+    patches: list[PatchFile] = [
+        PatchFile(
+            filename=p["filename"],
+            content=p["content"],
+            reason=p.get("reason", ""),
+        )
+        for p in patches_raw
+    ]
+
+    log.info(f"[coder] generated {len(patches)} patch(es)")
     return {
-        "current_code": executable_code,
-        "agent_messages": [action_message]
+        **state,
+        "patches":   patches,
+        "iteration": iteration,
     }

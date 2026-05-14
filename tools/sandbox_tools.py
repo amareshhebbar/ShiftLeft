@@ -1,32 +1,60 @@
-import tempfile
-import subprocess
-import os
+"""
+Runs pytest against a list of patches in an isolated temporary directory.
+Applies patches to a copy of the repo, then executes the test suite.
+"""
 
-def run_code_in_sandbox(code_string: str) -> dict:
-    """Executes code in a temporary file and captures the stdout/stderr."""
-    fd, path = tempfile.mkstemp(suffix=".py")
-    try:
-        with os.fdopen(fd, 'w') as f:
-            f.write(code_string)
-        
+import os
+import shutil
+import subprocess
+import tempfile
+from typing import List, Dict, Any
+
+from utils.logger import get_logger
+
+log = get_logger(__name__)
+
+
+def run_tests_against_patches(
+    repo_local_path: str,
+    patches: List[Dict],
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    """
+    Apply patches to a temp copy of the repo, run pytest, return results.
+
+    patches: list of {filename: str, content: str}
+    Returns: {passed: bool, output: str, duration: float}
+    """
+    import time
+
+    with tempfile.TemporaryDirectory() as sandbox:
+        # copy the entire repo into the sandbox
+        sandbox_repo = os.path.join(sandbox, "repo")
+        shutil.copytree(repo_local_path, sandbox_repo,
+                        ignore=shutil.ignore_patterns(".git"))
+
+        # apply patches
+        for patch in patches:
+            target = os.path.join(sandbox_repo, patch["filename"])
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w") as f:
+                f.write(patch["content"])
+
+        log.info(f"[sandbox] applied {len(patches)} patch(es), running tests…")
+        t0 = time.monotonic()
+
         result = subprocess.run(
-            ["python", path], 
-            capture_output=True, 
-            text=True, 
-            timeout=10
+            ["python", "-m", "pytest", "--tb=short", "-q", "--no-header"],
+            cwd=sandbox_repo,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
-        
-        passed = result.returncode == 0
-        logs = result.stdout + "\n" + result.stderr
-        
-        return {
-            "passed": passed,
-            "logs": logs.strip()
-        }
-    except subprocess.TimeoutExpired:
-        return {"passed": False, "logs": "Execution timed out after 10 seconds."}
-    except Exception as e:
-        return {"passed": False, "logs": f"System error during execution: {str(e)}"}
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
+
+        duration = round(time.monotonic() - t0, 2)
+        output   = (result.stdout + result.stderr).strip()
+        passed   = result.returncode == 0
+
+        log.info(f"[sandbox] tests {'PASSED' if passed else 'FAILED'} "
+                 f"in {duration}s")
+        return {"passed": passed, "output": output, "duration": duration}
