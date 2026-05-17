@@ -1,5 +1,3 @@
-"""Structured logger. Use get_logger(__name__) in every module."""
-
 import logging
 import sys
 

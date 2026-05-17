@@ -1,9 +1,3 @@
-"""
-FastAPI application — deployed to Google Cloud Run.
-Receives GitHub push webhooks and Cloud Scheduler pings,
-then kicks off the ShiftLeft pipeline as a background task.
-"""
-
 import hmac
 import hashlib
 import json
@@ -43,7 +37,6 @@ def _make_initial_state(repo_url: str, trigger: str) -> ShiftLeftState:
 
 
 def _run_and_cleanup(state: ShiftLeftState) -> None:
-    """Background task: run the full pipeline then clean up the temp clone."""
     try:
         result = shiftleft_app.invoke(state)
         pr_url = result.get("pr_url")
@@ -51,7 +44,6 @@ def _run_and_cleanup(state: ShiftLeftState) -> None:
     except Exception as e:
         log.error(f"[webhook] run {state['run_id']} failed: {e}", exc_info=True)
     finally:
-        # remove the temp clone to keep Cloud Run disk clean
         repo_path = state.get("repo_local_path")
         if repo_path:
             shutil.rmtree(repo_path, ignore_errors=True)
@@ -72,8 +64,6 @@ async def github_webhook(request: Request, background: BackgroundTasks):
 
     event = request.headers.get("X-GitHub-Event", "")
     data  = json.loads(payload)
-
-    # only trigger on pushes to the default branch
     if event != "push":
         return JSONResponse({"skipped": True, "reason": f"event={event}"})
     if not data.get("ref", "").endswith("/main"):
@@ -87,8 +77,6 @@ async def github_webhook(request: Request, background: BackgroundTasks):
 
 @app.post("/webhook/scheduler")
 async def scheduler_trigger(request: Request, background: BackgroundTasks):
-    # In production: validate the OIDC token from Cloud Scheduler.
-    # Simplified here for hackathon speed.
     body = {}
     try:
         body = await request.json()

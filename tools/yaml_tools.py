@@ -1,7 +1,3 @@
-"""
-Writes the .shiftleft/ YAML tree into a cloned repository directory.
-All functions are idempotent — safe to call on every run.
-"""
 
 import os
 import yaml
@@ -20,10 +16,6 @@ def _write(path: str, data: Any) -> None:
 
 
 def write_config(repo_root: str, overrides: Dict = None) -> str:
-    """
-    Write .shiftleft/config.yaml on first run.
-    If the file already exists it is NOT overwritten — the user's settings are preserved.
-    """
     path = os.path.join(repo_root, ".shiftleft", "config.yaml")
     if os.path.exists(path):
         return path
@@ -44,7 +36,6 @@ def write_config(repo_root: str, overrides: Dict = None) -> str:
 
 
 def write_manifest(repo_root: str, folder_descriptions: Dict[str, str]) -> str:
-    """Write .shiftleft/manifest.yaml — folder-level purpose map."""
     path = os.path.join(repo_root, ".shiftleft", "manifest.yaml")
     _write(path, {
         "generated_by": "shiftleft-cartographer",
@@ -55,18 +46,6 @@ def write_manifest(repo_root: str, folder_descriptions: Dict[str, str]) -> str:
 
 
 def write_file_yaml(repo_root: str, rel_path: str, file_meta: Dict) -> str:
-    """
-    Write .shiftleft/map/<rel_path>.yaml for one source file.
-
-    file_meta comes directly from ast_tools.analyse_file():
-    {
-        "purpose":   "short description from module docstring",
-        "functions": [{name, takes, returns, does, line}, ...],
-        "classes":   [{name, inherits, does, methods}, ...],
-        "lines":     int
-    }
-    """
-    # normalise path separators for the YAML key name
     safe_rel = rel_path.replace(os.sep, "/")
     yaml_path = os.path.join(repo_root, ".shiftleft", "map",
                              safe_rel + ".yaml")
@@ -79,7 +58,6 @@ def write_file_yaml(repo_root: str, rel_path: str, file_meta: Dict) -> str:
 
 
 def write_audit_result(repo_root: str, run_id: str, audit: Dict) -> str:
-    """Write .shiftleft/audits/<run_id>.yaml — one record per pipeline run."""
     path = os.path.join(repo_root, ".shiftleft", "audits", f"{run_id}.yaml")
     _write(path, {
         "run_id":    run_id,
@@ -90,11 +68,6 @@ def write_audit_result(repo_root: str, run_id: str, audit: Dict) -> str:
 
 
 def collect_yaml_files(repo_root: str) -> Dict[str, str]:
-    """
-    Read all generated .shiftleft/ YAML files and return them as
-    {repo-relative-path: file-content-string} so HITL can commit them
-    to GitHub without re-reading from disk.
-    """
     shiftleft_dir = os.path.join(repo_root, ".shiftleft")
     result: Dict[str, str] = {}
     if not os.path.exists(shiftleft_dir):

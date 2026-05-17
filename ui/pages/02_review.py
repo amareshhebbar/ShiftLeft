@@ -1,8 +1,3 @@
-"""
-Per-file diff viewer.
-Accept incoming (keep agent patch), reject (restore original), or
-open the full merge editor in vscode.dev.
-"""
 
 import streamlit as st
 from tools.github_tools import (
@@ -59,7 +54,6 @@ st.caption(f"{len(diffs)} file(s) changed in this PR.")
 # ── per-file cards ─────────────────────────────────────────────────────────
 for filename, diff_text in diffs.items():
     with st.expander(f"📄 `{filename}`", expanded=False):
-        # count additions/removals
         additions = diff_text.count("\n+") - diff_text.count("\n+++")
         removals  = diff_text.count("\n-") - diff_text.count("\n---")
         st.caption(f"+{additions} additions   -{removals} removals")

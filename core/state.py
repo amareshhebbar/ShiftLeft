@@ -1,51 +1,48 @@
-"""
-ShiftLeftState — the single shared envelope that flows through
-every LangGraph node. All fields are optional except repo_url and run_id
-so the graph can be invoked with a minimal initial payload.
-"""
+from __future__ import annotations
 
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import Any, Dict, List, TypedDict
 
-
-class PatchFile(TypedDict):
-    filename: str       # repo-relative path, e.g. "agents/coder.py"
-    content:  str       # full new file content (not a diff)
-    reason:   str       # one-line explanation of what was changed
+class PatchFile(TypedDict, total=False):
+    file_path:        str
+    original_content: str
+    patched_content:  str
+    diff:             str
 
 
-class TestResult(TypedDict):
-    passed:   bool
-    output:   str       # combined stdout + stderr from the test run
-    duration: float     # seconds
+class TestResult(TypedDict, total=False):
+    passed: bool
+    output: str   
+    error:  str  
 
+
+# ── Main pipeline state ────────────────────────────────────────────────────────
 
 class ShiftLeftState(TypedDict, total=False):
-    # ── Inputs (set at graph invocation) ──────────────────────────────────
-    repo_url:       str          # e.g. "https://github.com/owner/repo.git"
-    run_id:         str          # e.g. "2026-05-14_143022"
-    trigger_source: str          # "webhook" | "scheduler" | "manual"
+    run_id:         str  
+    repo_url:       str   
+    trigger_source: str   
 
-    # ── Cartographer outputs ───────────────────────────────────────────────
-    branch_name:    str          # e.g. "shiftleft/run-2026-05-14_143022"
-    file_map:       Dict[str, Any]   # rel_path → ast analysis dict
-    yaml_map:       Dict[str, str]   # rel_path → YAML file content string
-    repo_local_path: str         # temp dir where repo was cloned
+    gitlab_project_id: str           
+    open_issues:       List[Dict[str, Any]]  
 
-    # ── Triage outputs ─────────────────────────────────────────────────────
-    issue_summary:  str          # one-paragraph description of the problem
-    target_files:   List[str]    # files the coder should patch
-    severity:       str          # "critical" | "high" | "medium" | "low"
+    branch_name:    str         
+    file_map:       Dict[str, Any]
 
-    # ── Coder outputs ──────────────────────────────────────────────────────
-    patches:        List[PatchFile]
-    iteration:      int          # self-correction loop counter (max 3)
+    yaml_map:       Dict[str, str]
+    repo_local_path: str
 
-    # ── Auditor outputs ────────────────────────────────────────────────────
-    test_results:   TestResult
-    tests_passed:   bool
+    issue_summary: str         
+    target_files:  List[str]   
+    severity:      str         
 
-    # ── HITL outputs ───────────────────────────────────────────────────────
-    pr_url:         str
-    pr_number:      int
-    diff_hunks:     Dict[str, str]   # filename → unified diff string
-    changed_files:  List[str]
+    patches: List[Dict[str, Any]]
+
+    iteration: int 
+
+    test_results: str   
+    tests_passed: bool 
+
+    pr_url:        str            
+    pr_number:     int           
+    diff_hunks:    List[Dict[str, Any]] 
+    changed_files: List[str]     

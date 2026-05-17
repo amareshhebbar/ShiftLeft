@@ -1,8 +1,3 @@
-"""
-Google Cloud Scheduler wrapper.
-Used by the Streamlit settings page to create, update, and delete cron jobs.
-"""
-
 from google.cloud import scheduler_v1
 from utils.config import GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_URL
 from utils.logger import get_logger
@@ -18,7 +13,6 @@ def _client() -> scheduler_v1.CloudSchedulerClient:
 
 
 def upsert_job(cron: str = "0 2 * * *", job_id: str = "shiftleft-nightly") -> str:
-    """Create or update a Cloud Scheduler job. Returns the job resource name."""
     client = _client()
     job = scheduler_v1.Job(
         name=f"{_PARENT}/jobs/{job_id}",

@@ -1,5 +1,3 @@
-"""Run history, open PR list, and manual trigger."""
-
 import httpx
 import streamlit as st
 

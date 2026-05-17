@@ -1,8 +1,3 @@
-"""
-Runs pytest against a list of patches in an isolated temporary directory.
-Applies patches to a copy of the repo, then executes the test suite.
-"""
-
 import os
 import shutil
 import subprocess
@@ -19,12 +14,6 @@ def run_tests_against_patches(
     patches: List[Dict],
     timeout: int = 120,
 ) -> Dict[str, Any]:
-    """
-    Apply patches to a temp copy of the repo, run pytest, return results.
-
-    patches: list of {filename: str, content: str}
-    Returns: {passed: bool, output: str, duration: float}
-    """
     import time
 
     with tempfile.TemporaryDirectory() as sandbox:

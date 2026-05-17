@@ -1,96 +1,257 @@
-"""
-Cartographer agent — the first node in the ShiftLeft pipeline.
+from __future__ import annotations
 
-Responsibilities:
-  1. Clone (or pull) the target repository locally.
-  2. Run AST analysis on every Python file.
-  3. Write the .shiftleft/ YAML tree into the local clone.
-  4. Capture all YAML content in state for the HITL agent to commit.
-  5. Set branch_name and run_id for the rest of the pipeline.
-"""
+import ast
+import datetime
+import textwrap
+from typing import Any, Dict, List
 
-import os
-import subprocess
-import tempfile
-from datetime import datetime, timezone
+import yaml
 
 from core.state import ShiftLeftState
-from tools.ast_tools import walk_repo
-from tools.yaml_tools import (
-    write_config,
-    write_manifest,
-    write_file_yaml,
-    collect_yaml_files,
+from tools.gitlab_mcp_tools import (
+    get_file_content,
+    get_repository_tree,
+    list_issues,
 )
-from utils.config import DEFAULT_BASE_BRANCH
+from utils.config import GITLAB_TARGET_PROJECT
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# ── Tunables ───────────────────────────────────────────────────────────────────
+MAX_PY_FILES  = 35      
+MAX_FILE_CHARS = 12_000 
 
-def _run(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
+SKIP_PATTERNS = (
+    "test_",
+    "/tests/",
+    "tests/",
+    "/migrations/",
+    "migrations/",
+    ".shiftleft/",
+    "/setup.py",
+    "conftest.py",
+)
 
 
-def _clone_repo(repo_url: str, dest: str) -> None:
-    """Shallow clone for speed; fall back to full clone on error."""
+# ── AST helpers ───────────────────────────────────────────────────────────────
+
+def _safe_unparse(node: ast.AST) -> str:
     try:
-        _run(["git", "clone", "--depth", "1", "--quiet", repo_url, dest])
-    except subprocess.CalledProcessError:
-        log.warning("[cartographer] shallow clone failed, trying full clone")
-        _run(["git", "clone", "--quiet", repo_url, dest])
+        return ast.unparse(node) 
+    except (AttributeError, Exception):
+        return ""
 
 
-def _folder_descriptions(file_map: dict) -> dict:
-    """Produce a {folder: description} dict from the file map."""
-    folders: dict = {}
-    for rel_path in file_map:
-        parts   = rel_path.replace("\\", "/").split("/")
-        top_dir = parts[0] if len(parts) > 1 else "."
-        folders.setdefault(top_dir, []).append(rel_path)
-    return {
-        folder: f"{len(files)} Python file(s) — auto-mapped by ShiftLeft"
-        for folder, files in sorted(folders.items())
+def _ast_summary(source: str) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "functions":   [],
+        "classes":     [],
+        "imports":     [],
+        "loc":         source.count("\n") + 1,
+        "parse_error": None,
     }
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        summary["parse_error"] = f"{exc.msg} (line {exc.lineno})"
+        return summary
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child._parent = node  
+
+    collected_imports: List[str] = []
+    functions: List[Dict] = []
+    classes: List[Dict] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                collected_imports.append(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                collected_imports.append(node.module.split(".")[0])
+                
+        elif isinstance(node, ast.ClassDef):
+            methods = [
+                n.name
+                for n in ast.walk(node)
+                if isinstance(n, ast.FunctionDef)
+                and getattr(n, "_parent", None) is node
+            ]
+            bases = [_safe_unparse(b) for b in node.bases]
+            classes.append({
+                "name":     node.name,
+                "inherits": [b for b in bases if b],
+                "methods":  methods,
+                "loc":      (getattr(node, "end_lineno", node.lineno) - node.lineno + 1),
+            })
+
+        elif isinstance(node, ast.FunctionDef):
+            parent = getattr(node, "_parent", None)
+            if not isinstance(parent, ast.Module):
+                continue  
+
+            args = []
+            for arg in node.args.args:
+                ann = f": {_safe_unparse(arg.annotation)}" if arg.annotation else ""
+                args.append(f"{arg.arg}{ann}")
+
+            returns = _safe_unparse(node.returns) if node.returns else ""
+            docstring = ast.get_docstring(node) or ""
+
+            functions.append({
+                "name":      node.name,
+                "args":      args,
+                "returns":   returns,
+                "docstring": textwrap.shorten(docstring, width=160, placeholder="…"),
+                "loc":       (getattr(node, "end_lineno", node.lineno) - node.lineno + 1),
+                "lineno":    node.lineno,
+            })
+
+    summary["functions"] = functions
+    summary["classes"]   = classes
+    summary["imports"]   = sorted(set(collected_imports))
+    return summary
 
 
-def cartographer_node(state: ShiftLeftState) -> ShiftLeftState:
-    repo_url = state["repo_url"]
-    run_id   = state.get("run_id") or \
-               datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-    branch   = f"shiftleft/run-{run_id}"
+# ── YAML builder ──────────────────────────────────────────────────────────────
 
-    log.info(f"[cartographer] run_id={run_id}, cloning {repo_url}")
+def _build_yaml(filepath: str, summary: Dict[str, Any], run_id: str) -> str:
+    doc: Dict[str, Any] = {
+        "file":          filepath,
+        "last_analyzed": run_id,
+        "loc":           summary["loc"],
+        "imports":       summary["imports"],
+    }
+    if summary.get("parse_error"):
+        doc["parse_error"] = summary["parse_error"]
 
-    # We use a persistent temp dir so auditor can reference it later.
-    # The caller (main.py / webhook) is responsible for cleanup.
-    tmp = tempfile.mkdtemp(prefix="shiftleft_")
-    _clone_repo(repo_url, tmp)
+    doc["functions"] = [
+        {
+            "name":      fn["name"],
+            "args":      fn["args"],
+            "returns":   fn["returns"] or "None",
+            "docstring": fn["docstring"],
+            "loc":       fn["loc"],
+        }
+        for fn in summary["functions"]
+    ]
+    doc["classes"] = [
+        {
+            "name":     cls["name"],
+            "inherits": cls["inherits"],
+            "methods":  cls["methods"],
+            "loc":      cls["loc"],
+        }
+        for cls in summary["classes"]
+    ]
+    return yaml.dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-    # write .shiftleft/config.yaml (only on first run; no-op after that)
-    write_config(tmp, {"base_branch": DEFAULT_BASE_BRANCH})
 
-    # walk the entire repo with AST
-    file_map = walk_repo(tmp)
-    log.info(f"[cartographer] mapped {len(file_map)} Python files")
+# ── Agent entry point ──────────────────────────────────────────────────────────
 
-    # write per-file YAMLs
-    for rel_path, meta in file_map.items():
-        write_file_yaml(tmp, rel_path, meta)
+def cartographer(state: ShiftLeftState) -> ShiftLeftState:
+    run_id  = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+    project = GITLAB_TARGET_PROJECT
 
-    # write folder manifest
-    write_manifest(tmp, _folder_descriptions(file_map))
+    log.info(f"cartographer — run_id={run_id}  project={project}")
+    log.info("cartographer — fetching repository tree via GitLab REST API")
+    try:
+        tree = get_repository_tree(project=project, recursive=True)
+    except Exception as exc:
+        log.error(f"cartographer — tree fetch failed: {exc}")
+        raise
 
-    # read all .shiftleft/ files back into memory for HITL to commit
-    yaml_map = collect_yaml_files(tmp)
-    log.info(f"[cartographer] generated {len(yaml_map)} YAML files")
+    py_files: List[str] = []
+    for item in tree:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
+        if not path.endswith(".py"):
+            continue
+        if any(skip in path for skip in SKIP_PATTERNS):
+            continue
+        py_files.append(path)
+
+    py_files = py_files[:MAX_PY_FILES]
+    log.info(f"cartographer — {len(py_files)} Python files selected (tree had {len(tree)} items)")
+    file_map:  Dict[str, Any] = {}
+    yaml_map:  Dict[str, str] = {}
+    errors:    List[str]      = []
+
+    for filepath in py_files:
+        try:
+            content = get_file_content(filepath, project=project)
+            if not content.strip():
+                log.warning(f"cartographer — {filepath} is empty, skipping")
+                continue
+            if len(content) > MAX_FILE_CHARS:
+                content = content[:MAX_FILE_CHARS] + "\n# [ShiftLeft: file truncated]\n"
+
+            summary = _ast_summary(content)
+            summary["raw_content"] = content 
+            file_map[filepath] = summary
+
+            yaml_content = _build_yaml(filepath, summary, run_id)
+            yaml_key = f".shiftleft/map/{filepath.removesuffix('.py')}.yaml"
+            yaml_map[yaml_key] = yaml_content
+
+            log.info(
+                f"cartographer — {filepath}  "
+                f"({summary['loc']} loc, "
+                f"{len(summary['functions'])} funcs, "
+                f"{len(summary['classes'])} classes)"
+            )
+        except Exception as exc:
+            log.warning(f"cartographer — skipping {filepath}: {exc}")
+            errors.append(f"{filepath}: {exc}")
+    config_doc = {
+        "version":          "1.0",
+        "project":          project,
+        "schedule":         "0 2 * * *",
+        "base_branch":      "main",
+        "ignore":           list(SKIP_PATTERNS),
+        "max_files_per_run": MAX_PY_FILES,
+    }
+    yaml_map[".shiftleft/config.yaml"] = yaml.dump(
+        config_doc, default_flow_style=False, allow_unicode=True
+    )
+
+    manifest_doc = {
+        "run_id":          run_id,
+        "files_analyzed":  len(file_map),
+        "files_skipped":   len(errors),
+        "generated_at":    run_id,
+        "python_files":    py_files,
+        "skip_errors":     errors[:10],
+    }
+    yaml_map[".shiftleft/manifest.yaml"] = yaml.dump(
+        manifest_doc, default_flow_style=False, allow_unicode=True
+    )
+
+    log.info(f"cartographer — {len(yaml_map)} YAML manifests built")
+    log.info("cartographer — fetching open issues via GitLab MCP")
+    try:
+        open_issues = list_issues(project=project, state="opened", per_page=20)
+        if not isinstance(open_issues, list):
+            open_issues = []
+        log.info(f"cartographer — {len(open_issues)} open issues loaded")
+        for issue in open_issues[:5]:
+            log.info(f"  #{issue.get('iid','?')} {issue.get('title','')}")
+    except Exception as exc:
+        log.warning(f"cartographer — could not fetch issues: {exc}")
+        open_issues = []
 
     return {
         **state,
-        "run_id":          run_id,
-        "branch_name":     branch,
-        "file_map":        file_map,
-        "yaml_map":        yaml_map,
-        "repo_local_path": tmp,
-        "iteration":       0,
+        "run_id":             run_id,
+        "gitlab_project_id":  project,
+        "branch_name":        f"shiftleft/run-{run_id}",
+        "file_map":           file_map,
+        "yaml_map":           yaml_map,
+        "open_issues":        open_issues,
+        "repo_local_path":    "", 
     }

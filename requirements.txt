@@ -14,36 +14,28 @@ langchain-google-genai
 
 python-dotenv
 
-
-# orchestration
 langgraph>=0.1.0
 langchain>=0.2.0
 langchain-google-genai>=1.0.0
 langchain-core>=0.2.0
 
-# github
 PyGithub>=2.3.0
 
-# web server
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 
-# cloud
 google-cloud-scheduler>=2.13.0
 google-auth>=2.29.0
 
-# ui
 streamlit>=1.33.0
 
-# utilities
 PyYAML>=6.0
 httpx>=0.27.0
 GitPython>=3.1.43
 python-dotenv>=1.0.0
 
-# testing
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 
-# tracing
 langsmith>=0.1.0
+google-generativeai

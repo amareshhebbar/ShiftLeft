@@ -1,8 +1,3 @@
-"""
-GitHub API operations used by ShiftLeft.
-All functions are stateless and re-authenticate on every call
-so they work correctly in Cloud Run's ephemeral containers.
-"""
 
 import re
 import httpx
@@ -26,7 +21,6 @@ def _repo(repo_name: str):
 # ── Branch operations ──────────────────────────────────────────────────────
 
 def create_branch(repo_name: str, branch: str, base: str = None) -> bool:
-    """Create a new branch from base. Returns True if created or already exists."""
     base = base or DEFAULT_BASE_BRANCH
     r = _repo(repo_name)
     sha = r.get_branch(base).commit.sha
@@ -35,7 +29,7 @@ def create_branch(repo_name: str, branch: str, base: str = None) -> bool:
         log.info(f"[github] created branch: {branch}")
         return True
     except GithubException as e:
-        if e.status == 422:   # already exists — that is fine
+        if e.status == 422:   
             log.info(f"[github] branch already exists: {branch}")
             return True
         log.error(f"[github] create_branch failed: {e}")
@@ -47,14 +41,9 @@ def create_branch(repo_name: str, branch: str, base: str = None) -> bool:
 def commit_files(
     repo_name: str,
     branch: str,
-    files: Dict[str, str],        # {repo-relative-path: content-string}
+    files: Dict[str, str],        
     message: str = "chore(shiftleft): automated patch",
 ) -> str:
-    """
-    Commit multiple files to a branch in a single API round-trip using
-    the Git Data API (blobs → tree → commit → ref update).
-    Returns the new commit SHA.
-    """
     r = _repo(repo_name)
     ref       = r.get_git_ref(f"heads/{branch}")
     base_sha  = ref.object.sha
@@ -89,10 +78,6 @@ def open_pr(
     body: str,
     base: str = None,
 ) -> Dict:
-    """
-    Open a pull request. Returns {"pr_number": int, "pr_url": str}.
-    Raises GithubException on failure (caller handles).
-    """
     base = base or DEFAULT_BASE_BRANCH
     r = _repo(repo_name)
     pr = r.create_pull(title=title, body=body, head=branch, base=base)
@@ -101,10 +86,6 @@ def open_pr(
 
 
 def get_pr_diff(repo_name: str, pr_number: int) -> Dict[str, str]:
-    """
-    Fetch the raw unified diff for a PR and split it into per-file chunks.
-    Returns {filename: diff_string}.
-    """
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept":        "application/vnd.github.v3.diff",
@@ -126,13 +107,11 @@ def get_pr_diff(repo_name: str, pr_number: int) -> Dict[str, str]:
 
 
 def get_file_content(repo_name: str, path: str, ref: str) -> str:
-    """Fetch a file's content from a specific branch/ref."""
     r = _repo(repo_name)
     return r.get_contents(path, ref=ref).decoded_content.decode("utf-8", errors="replace")
 
 
 def list_shiftleft_prs(repo_name: str, state: str = "open") -> List[Dict]:
-    """Return all PRs whose head branch starts with 'shiftleft/'."""
     r = _repo(repo_name)
     return [
         {
@@ -151,18 +130,11 @@ def list_shiftleft_prs(repo_name: str, state: str = "open") -> List[Dict]:
 # ── Review helpers (used by Streamlit review page) ────────────────────────
 
 def accept_incoming(repo_name: str, branch: str, filename: str) -> str:
-    """Accept the agent's version — no-op since the branch already has it."""
-    # The agent's content IS already on the branch.
-    # This function exists as a clear API contract; it just logs acceptance.
     log.info(f"[github] accepted incoming: {filename} on {branch}")
     return "accepted"
 
 
 def reject_file(repo_name: str, branch: str, filename: str, base: str = None) -> str:
-    """
-    Reject the agent's change: restore the file content from base branch,
-    effectively reverting just this file on the PR branch.
-    """
     base = base or DEFAULT_BASE_BRANCH
     original = get_file_content(repo_name, filename, base)
     return commit_files(

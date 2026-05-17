@@ -1,16 +1,9 @@
-"""
-Python AST analysis.
-Extracts function signatures, class definitions, and module docstrings
-from .py source files. Returns structured dicts ready for YAML serialisation.
-"""
-
 import ast
 import os
 from typing import Dict, List, Any
 
 
 def _annotation(node) -> str:
-    """Convert an AST annotation node to a readable string."""
     if node is None:
         return "Any"
     try:
@@ -27,10 +20,6 @@ def _docstring_first_line(node) -> str:
 
 
 def extract_functions(source: str) -> List[Dict]:
-    """
-    Returns a list of function descriptors from Python source code.
-    Skips private helpers (single leading underscore) but keeps dunders.
-    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -62,7 +51,6 @@ def extract_functions(source: str) -> List[Dict]:
 
 
 def extract_classes(source: str) -> List[Dict]:
-    """Returns a list of class descriptors from Python source code."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -93,10 +81,6 @@ def extract_classes(source: str) -> List[Dict]:
 
 
 def analyse_file(abs_path: str) -> Dict[str, Any]:
-    """
-    Top-level function: read a .py file and return a complete meta dict.
-    Returns {"purpose", "functions", "classes", "lines"}.
-    """
     try:
         with open(abs_path, "r", errors="replace") as f:
             source = f.read()
@@ -127,10 +111,6 @@ IGNORE_DIRS = {
 
 
 def walk_repo(repo_root: str) -> Dict[str, Any]:
-    """
-    Walk an entire repository and return {rel_path: analyse_file_result}
-    for every .py file found. Prunes common non-source directories.
-    """
     result: Dict[str, Any] = {}
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]

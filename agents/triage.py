@@ -1,90 +1,153 @@
-"""
-Triage agent — reads the file map and uses Gemini to identify
-the single highest-impact issue to fix in this run.
-"""
+from __future__ import annotations
 
 import json
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
+import textwrap
+import warnings
+from typing import Any, Dict, List
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="google")
+import google.generativeai as genai
 
 from core.state import ShiftLeftState
 from utils.config import GEMINI_API_KEY, GEMINI_MODEL
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+genai.configure(api_key=GEMINI_API_KEY)
 
-_llm = ChatGoogleGenerativeAI(
-    model=GEMINI_MODEL,
-    google_api_key=GEMINI_API_KEY,
-    temperature=0.1,
-)
-
-SYSTEM = """You are a senior software engineer performing automated code triage.
-You will receive a structured map of a Python repository — every file, its purpose,
-and every public function (with its signature and docstring).
-
-Your job: identify the single most impactful code quality issue present.
-Focus on: bugs, missing error handling, security vulnerabilities, broken logic,
-missing type annotations on public APIs, or dangerously untested code paths.
-
-Respond ONLY with valid JSON matching this schema exactly:
-{
-  "issue_summary": "one paragraph, specific, actionable",
-  "target_files":  ["path/to/file.py", ...],
-  "severity":      "critical|high|medium|low",
-  "rationale":     "why this issue matters more than others"
-}
-Do not include markdown fences or any text outside the JSON object."""
+SKIP_TARGET_PATTERNS = ("docs/", "tests/", "test_", "migrations/", ".shiftleft/",
+                        "setup.py", "conf.py", "conftest.py")
 
 
-def _build_prompt(file_map: dict) -> str:
+def _fmt_issues(issues: List[Dict]) -> str:
+    if not issues:
+        return "No open issues — perform static analysis only."
     lines = []
-    for rel_path, meta in list(file_map.items())[:40]:  # cap at 40 files
-        lines.append(f"\n## {rel_path}")
-        lines.append(f"Purpose: {meta.get('purpose', '(unknown)')}")
-        for fn in meta.get("functions", [])[:10]:
-            sig = f"  fn {fn['name']}({', '.join(fn['takes'])}) -> {fn['returns']}"
-            lines.append(sig)
-            lines.append(f"     does: {fn['does']}")
-        for cls in meta.get("classes", [])[:5]:
-            lines.append(f"  class {cls['name']}: {cls['does']}")
+    for i in issues[:10]:
+        desc = textwrap.shorten((i.get("description") or "").strip(), 200, placeholder="…")
+        lines.append(f"#{i.get('iid','?')}: {i.get('title','')}\n  {desc}")
+    return "\n\n".join(lines)
+
+
+def _fmt_file_map(file_map: Dict[str, Any]) -> str:
+    lines = []
+    for fp, info in file_map.items():
+        if any(p in fp for p in SKIP_TARGET_PATTERNS):
+            continue         
+        fns  = [f["name"] for f in info.get("functions", [])]
+        cls  = [c["name"] for c in info.get("classes", [])]
+        imps = info.get("imports", [])[:8]
+        entry = (
+            f"FILE: {fp}  ({info.get('loc',0)} lines)\n"
+            f"  imports:   {', '.join(imps) or 'none'}\n"
+            f"  functions: {', '.join(fns) or 'none'}\n"
+            f"  classes:   {', '.join(cls) or 'none'}"
+        )
+        if info.get("parse_error"):
+            entry += f"\n  PARSE ERROR: {info['parse_error']}"
+        lines.append(entry)
     return "\n".join(lines)
 
 
-def triage_node(state: ShiftLeftState) -> ShiftLeftState:
-    file_map = state.get("file_map") or {}
+_PROMPT = """\
+You are a principal engineer doing automated bug triage on a Python codebase.
+
+## Open issues (user-reported)
+{issues}
+
+## Codebase map  (docs/ and test files excluded — do NOT target them)
+{file_map}
+
+## Task
+Pick the SINGLE highest-impact bug. Priority order:
+1. Matches an open issue
+2. Reliability: unhandled exceptions, missing error handling, crashes
+3. Correctness: wrong logic, data loss, off-by-one
+4. Must be fixable by changing 1 file
+
+Return ONLY this JSON — no markdown, no extra text:
+{{
+  "severity": "critical|high|medium|low",
+  "target_files": ["exactly/one/file.py"],
+  "issue_summary": "One sentence, max 100 chars, describing the exact bug",
+  "root_cause": "2 sentences explaining why it is a bug",
+  "suggested_fix": "2 sentences on how to fix it",
+  "related_issue_iid": null
+}}
+"""
+
+
+def triage(state: ShiftLeftState) -> ShiftLeftState:
+    file_map    = state.get("file_map") or {}
+    open_issues = state.get("open_issues") or []
+
     if not file_map:
-        log.warning("[triage] empty file_map — skipping")
-        return {
-            **state,
-            "issue_summary": "No Python files found in repository.",
-            "target_files":  [],
-            "severity":      "low",
-        }
+        log.warning("triage — file_map empty")
+        return {**state, "issue_summary": "No files to analyze",
+                "target_files": [], "severity": "low"}
+    code_file_map = {
+        fp: info for fp, info in file_map.items()
+        if not any(p in fp for p in SKIP_TARGET_PATTERNS)
+    }
+    if not code_file_map:
+        code_file_map = file_map   
 
-    prompt = _build_prompt(file_map)
-    log.info(f"[triage] sending {len(file_map)} files to Gemini for triage")
+    log.info(f"triage — {len(code_file_map)} code files + {len(open_issues)} issues → Gemini")
 
-    response = _llm.invoke([
-        SystemMessage(content=SYSTEM),
-        HumanMessage(content=f"Repository map:\n{prompt}"),
-    ])
+    prompt = _PROMPT.format(
+        issues   = _fmt_issues(open_issues),
+        file_map = _fmt_file_map(file_map),
+    )
+
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=16384,   
+            ),
+        )
+        raw = resp.text.strip()
+    except Exception as exc:
+        log.error(f"triage — Gemini failed: {exc}")
+        raise
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
 
     try:
-        data = json.loads(response.content)
+        result: Dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError:
-        # Gemini occasionally wraps output in ```json — strip and retry
-        import re
-        cleaned = re.sub(r"```(?:json)?|```", "", response.content).strip()
-        data    = json.loads(cleaned)
+        log.error(f"triage — invalid JSON (len={len(raw)}):\n{raw[:400]}")
+        best = max(code_file_map.items(), key=lambda kv: kv[1].get("loc", 0))
+        result = {
+            "severity":          "medium",
+            "target_files":      [best[0]],
+            "issue_summary":     f"Potential reliability issue in {best[0]}",
+            "root_cause":        "Automated triage could not parse Gemini JSON.",
+            "suggested_fix":     "Review the file manually.",
+            "related_issue_iid": None,
+        }
 
-    log.info(f"[triage] severity={data['severity']}, "
-             f"files={data['target_files']}, "
-             f"summary={data['issue_summary'][:80]}…")
+    severity     = result.get("severity", "medium")
+    target_files = result.get("target_files") or []
+    summary      = result.get("issue_summary", "")
+    valid = [f for f in target_files if f in file_map]
+    if not valid:
+        for candidate in target_files:
+            base = candidate.split("/")[-1]
+            for known in code_file_map:
+                if known.split("/")[-1] == base:
+                    valid.append(known); break
+    if not valid:
+        best = max(code_file_map.items(), key=lambda kv: kv[1].get("loc", 0))
+        valid = [best[0]]
+        log.warning(f"triage — target {target_files} not in map; using {valid}")
+    valid = [f for f in valid if not any(p in f for p in SKIP_TARGET_PATTERNS)]
+    if not valid:
+        best = max(code_file_map.items(), key=lambda kv: kv[1].get("loc", 0))
+        valid = [best[0]]
 
-    return {
-        **state,
-        "issue_summary": data["issue_summary"],
-        "target_files":  data["target_files"],
-        "severity":      data["severity"],
-    }
+    log.info(f"triage — severity={severity} target={valid} summary={summary}")
+    return {**state, "issue_summary": summary, "target_files": valid, "severity": severity}

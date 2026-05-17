@@ -1,5 +1,3 @@
-"""Configure and control the Cloud Scheduler automated run job."""
-
 import streamlit as st
 from cloud.scheduler import upsert_job, delete_job, list_jobs
 

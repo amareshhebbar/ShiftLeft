@@ -1,115 +1,146 @@
-"""
-Coder agent — generates patches for the files identified by triage.
-Uses Gemini's full context window to read the target files in their
-entirety and produce corrected versions.
-"""
+from __future__ import annotations
 
-import os
-import json
+import difflib
 import re
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage
+import warnings
+from typing import Any, Dict, List
 
-from core.state import ShiftLeftState, PatchFile
+warnings.filterwarnings("ignore", category=FutureWarning, module="google")
+import google.generativeai as genai
+
+from core.state import PatchFile, ShiftLeftState
 from utils.config import GEMINI_API_KEY, GEMINI_MODEL
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_llm = ChatGoogleGenerativeAI(
-    model=GEMINI_MODEL,
-    google_api_key=GEMINI_API_KEY,
-    temperature=0.15,
-)
+genai.configure(api_key=GEMINI_API_KEY)
 
-SYSTEM = """You are an expert Python engineer performing automated code repair.
-You will receive:
-  1. A description of the issue to fix.
-  2. The full content of one or more files that need to be patched.
-  3. (On retry) the test output from the previous attempt and what went wrong.
+_CODER_PROMPT = """\
+You are an expert Python engineer. Your task is to fix one specific bug in a file.
 
-Produce corrected versions of the files.
+## Bug report
+Severity : {severity}
+File     : {filepath}
+Summary  : {issue_summary}
 
-Respond ONLY with a JSON array. Each element must match this schema exactly:
-[
-  {
-    "filename": "agents/coder.py",
-    "content":  "<complete new file content as a string>",
-    "reason":   "one-line explanation of what was changed"
-  }
-]
+## Current file content
+```python
+{original_content}
+```
 
-Rules:
-- Return the COMPLETE file content, not a diff.
-- Do not truncate or abbreviate any code.
-- Preserve all existing imports unless they are part of the bug.
-- Do not add any text outside the JSON array.
-- If a file does not need changes, do not include it in the response."""
+## Instructions
+- Fix ONLY the described bug. Touch nothing else.
+- Return the COMPLETE fixed file (not a diff, not a snippet — the whole file).
+- Wrap the entire file in a single ```python ... ``` block.
+- If the fix requires a new import, add it at the top with the other imports.
+- Do NOT add any explanation outside the code block.
+"""
 
 
-def _read_file(repo_local_path: str, rel_path: str) -> str:
-    abs_path = os.path.join(repo_local_path, rel_path)
-    if not os.path.exists(abs_path):
-        return f"# File not found: {rel_path}"
-    with open(abs_path, "r", errors="replace") as f:
-        return f.read()
-
-
-def _build_prompt(state: ShiftLeftState) -> str:
-    issue     = state.get("issue_summary", "")
-    targets   = state.get("target_files", [])
-    repo_path = state.get("repo_local_path", "")
-    iteration = state.get("iteration", 0)
-    previous  = state.get("test_results", {})
-
-    parts = [f"Issue to fix:\n{issue}\n"]
-
-    if iteration > 0 and previous:
-        parts.append(
-            f"Previous attempt failed (iteration {iteration}).\n"
-            f"Test output:\n{previous.get('output', '')}\n"
-            "Analyse the failures and produce a corrected patch.\n"
-        )
-
-    for rel_path in targets[:5]:   # cap at 5 files per run
-        content = _read_file(repo_path, rel_path)
-        parts.append(f"File: {rel_path}\n```python\n{content}\n```")
-
-    return "\n\n".join(parts)
-
-
-def coder_node(state: ShiftLeftState) -> ShiftLeftState:
-    iteration = state.get("iteration", 0) + 1
-    log.info(f"[coder] iteration {iteration}, "
-             f"targets={state.get('target_files', [])}")
-
-    prompt   = _build_prompt(state)
-    response = _llm.invoke([
-        SystemMessage(content=SYSTEM),
-        HumanMessage(content=prompt),
-    ])
-
-    raw = response.content
-    # strip markdown code fences if present
-    raw = re.sub(r"```(?:json)?|```", "", raw).strip()
-
-    try:
-        patches_raw = json.loads(raw)
-    except json.JSONDecodeError as e:
-        log.error(f"[coder] JSON parse failed: {e}\nRaw:\n{raw[:500]}")
-        # Return an empty patch list — auditor will report failure
-        patches_raw = []
-
-    patches: list[PatchFile] = [
-        PatchFile(
-            filename=p["filename"],
-            content=p["content"],
-            reason=p.get("reason", ""),
-        )
-        for p in patches_raw
+def _extract_code(response_text: str, original: str) -> str:
+    """Pull the Python code block out of Gemini's response."""
+    patterns = [
+        r"```python\s*\n(.*?)```",
+        r"```\s*\n(.*?)```",
     ]
+    for pat in patterns:
+        m = re.search(pat, response_text, re.DOTALL)
+        if m:
+            code = m.group(1)
+            if len(code.strip()) > len(original) * 0.3:
+                return code
+    stripped = response_text.strip()
+    if stripped.startswith(("import ", "from ", "def ", "class ", "#")):
+        return stripped
+    log.warning("coder — could not extract code block from Gemini response; using original")
+    return original
 
-    log.info(f"[coder] generated {len(patches)} patch(es)")
+
+def _unified_diff(original: str, patched: str, filepath: str) -> str:
+    original_lines = original.splitlines(keepends=True)
+    patched_lines  = patched.splitlines(keepends=True)
+    diff = difflib.unified_diff(
+        original_lines, patched_lines,
+        fromfile=f"a/{filepath}", tofile=f"b/{filepath}",
+        lineterm="",
+    )
+    return "".join(diff)
+
+
+def coder(state: ShiftLeftState) -> ShiftLeftState:
+    target_files  = state.get("target_files") or []
+    file_map      = state.get("file_map") or {}
+    issue_summary = state.get("issue_summary", "")
+    severity      = state.get("severity", "medium")
+    iteration     = (state.get("iteration") or 0) + 1
+    prev_patches  = state.get("patches") or []
+
+    log.info(f"coder — iteration {iteration}, targets: {target_files}")
+
+    if not target_files:
+        log.warning("coder — no target_files in state")
+        return {**state, "patches": [], "iteration": iteration}
+
+    model   = genai.GenerativeModel(GEMINI_MODEL)
+    patches: List[PatchFile] = []
+
+    for filepath in target_files:
+        info = file_map.get(filepath)
+        if not info:
+            log.warning(f"coder — {filepath} not in file_map, skipping")
+            continue
+
+        original_content = info.get("raw_content", "")
+        if not original_content.strip():
+            log.warning(f"coder — {filepath} has empty raw_content")
+            continue
+        extra_context = ""
+        if iteration > 1 and prev_patches:
+            for p in prev_patches:
+                if p.get("file_path") == filepath:
+                    extra_context = (
+                        f"\n\nNOTE: Your previous fix failed the auditor. "
+                        f"The failed patch diff was:\n{p.get('diff','')[:500]}\n"
+                        f"Try a different approach."
+                    )
+
+        prompt = _CODER_PROMPT.format(
+            severity=severity,
+            filepath=filepath,
+            issue_summary=issue_summary,
+            original_content=original_content[:10_000],  
+        ) + extra_context
+
+        log.info(f"coder — calling Gemini for {filepath} ({len(original_content)} chars)")
+        try:
+            resp = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.15,
+                    max_output_tokens=8192,
+                ),
+            )
+            raw = resp.text
+        except Exception as exc:
+            log.error(f"coder — Gemini call failed for {filepath}: {exc}")
+            raise
+
+        patched_content = _extract_code(raw, original_content)
+        diff            = _unified_diff(original_content, patched_content, filepath)
+
+        if not diff.strip():
+            log.warning(f"coder — patch for {filepath} produced no diff (Gemini may have returned the same file)")
+        else:
+            log.info(f"coder — patch for {filepath}: {diff.count(chr(10))} diff lines")
+
+        patches.append({
+            "file_path":        filepath,
+            "original_content": original_content,
+            "patched_content":  patched_content,
+            "diff":             diff,
+        })
+
     return {
         **state,
         "patches":   patches,
