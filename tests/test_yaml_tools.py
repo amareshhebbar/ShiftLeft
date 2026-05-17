@@ -14,7 +14,7 @@ def test_write_config_creates_file():
 def test_write_config_is_idempotent():
     with tempfile.TemporaryDirectory() as tmp:
         p1 = write_config(tmp, {"schedule": "0 3 * * *"})
-        p2 = write_config(tmp, {"schedule": "0 4 * * *"})  # should NOT overwrite
+        p2 = write_config(tmp, {"schedule": "0 4 * * *"}) 
         with open(p1) as f:
             data = yaml.safe_load(f)
         assert data["schedule"] == "0 3 * * *"

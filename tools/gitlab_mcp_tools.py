@@ -213,8 +213,6 @@ def get_repository_tree(
 def get_file_content(file_path: str, project: str = None, ref: str = None) -> str:
     project = project or GITLAB_TARGET_PROJECT
     ref = ref or _default_branch(project)
-
-    # Try MCP first
     try:
         result = _client.call_tool("get_file_contents", {
             "project_id": project,
@@ -233,8 +231,6 @@ def get_file_content(file_path: str, project: str = None, ref: str = None) -> st
         if "not found" not in str(e).lower() and "404" not in str(e):
             raise
         log.warning(f"MCP get_file_contents 404 for {file_path}, falling back to REST")
-
-    # REST fallback
     enc_proj = project.replace("/", "%2F")
     enc_file = file_path.replace("/", "%2F")
     resp = httpx.get(
