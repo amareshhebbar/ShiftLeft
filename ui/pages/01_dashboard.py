@@ -1,64 +1,101 @@
+import os, sys, threading
+from datetime import datetime
 import httpx
 import streamlit as st
 
-from tools.github_tools import list_shiftleft_prs
-from utils.config import CLOUD_RUN_URL, GITHUB_TARGET_REPO
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
+# Load secrets (Streamlit Cloud puts them in st.secrets)
+def _get(key, default=""):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return os.environ.get(key, default)
+
+GITLAB_TOKEN   = _get("GITLAB_TOKEN")
+GITLAB_URL     = _get("GITLAB_URL", "https://gitlab.com")
+GITLAB_PROJECT = _get("GITLAB_TARGET_PROJECT", "")
+
+os.environ["GITLAB_TOKEN"]          = GITLAB_TOKEN
+os.environ["GITLAB_URL"]            = GITLAB_URL
+os.environ["GITLAB_TARGET_PROJECT"] = GITLAB_PROJECT
+os.environ["GEMINI_API_KEY"]        = _get("GEMINI_API_KEY")
+os.environ["GEMINI_MODEL"]          = _get("GEMINI_MODEL", "gemini-2.5-flash")
+
+st.set_page_config(page_title="Dashboard — ShiftLeft", page_icon="📊", layout="wide")
 st.title("📊 Dashboard")
 
-# ── Manual trigger ─────────────────────────────────────────────────────────
+# ── Trigger ────────────────────────────────────────────────────────────────
 st.subheader("Trigger a run")
-repo_input = st.text_input(
-    "GitHub repository (owner/name)",
-    value=GITHUB_TARGET_REPO,
-    help="e.g. torvalds/linux",
-)
+project_input = st.text_input("GitLab project (user/repo)", value=GITLAB_PROJECT)
 
 if st.button("▶  Run ShiftLeft now", type="primary"):
-    with st.spinner("Queuing run on Cloud Run…"):
+    st.info("Pipeline running — takes ~60 seconds…")
+
+    def _run():
+        from core.graph import shiftleft_app
+        from core.state import ShiftLeftState
+        run_id = datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        state: ShiftLeftState = {
+            "run_id": run_id, "repo_url": f"https://gitlab.com/{project_input}",
+            "trigger_source": "streamlit", "gitlab_project_id": project_input,
+            "open_issues": [], "branch_name": f"shiftleft/run-{run_id}",
+            "file_map": {}, "yaml_map": {}, "repo_local_path": "",
+            "issue_summary": "", "target_files": [], "severity": "medium",
+            "patches": [], "iteration": 0, "test_results": "",
+            "tests_passed": False, "pr_url": "", "pr_number": 0,
+            "diff_hunks": [], "changed_files": [],
+        }
         try:
-            resp = httpx.post(
-                f"{CLOUD_RUN_URL}/webhook/scheduler",
-                json={"source": "manual", "repo_url":
-                      f"https://github.com/{repo_input}.git"},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                st.success(f"Queued! Run ID: `{data.get('run_id', 'unknown')}`")
-                st.info("Check GitHub for the new PR in a few minutes.")
-            else:
-                st.error(f"Webhook returned HTTP {resp.status_code}: {resp.text}")
-        except httpx.ConnectError:
-            st.error("Could not reach Cloud Run. Is CLOUD_RUN_URL set correctly?")
+            result = shiftleft_app.invoke(state)
+            st.session_state["last_result"] = result
         except Exception as e:
-            st.error(str(e))
+            st.session_state["last_error"] = str(e)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    with st.spinner("Running…"): t.join(timeout=180)
+
+    if "last_result" in st.session_state:
+        mr_url = st.session_state["last_result"].get("pr_url", "")
+        if mr_url:
+            st.success(f"✅ MR created: [{mr_url}]({mr_url})")
+            st.balloons()
+        else:
+            st.warning("Done — no MR URL returned. Check logs.")
+    elif "last_error" in st.session_state:
+        st.error(st.session_state["last_error"])
 
 st.divider()
 
-# ── PR history ─────────────────────────────────────────────────────────────
-st.subheader("Recent ShiftLeft pull requests")
+# ── Recent MRs ─────────────────────────────────────────────────────────────
+st.subheader("Recent ShiftLeft Merge Requests")
+mr_state = st.selectbox("Filter", ["opened", "merged", "closed"])
 
-col_filter1, col_filter2 = st.columns(2)
-pr_state = col_filter1.selectbox("Filter by state", ["open", "closed", "all"])
-max_prs  = col_filter2.number_input("Show last N PRs", min_value=1,
-                                     max_value=50, value=10)
+def _load_mrs(project, state):
+    enc = project.replace("/", "%2F")
+    resp = httpx.get(
+        f"{GITLAB_URL}/api/v4/projects/{enc}/merge_requests",
+        params={"state": state, "per_page": 20},
+        headers={"PRIVATE-TOKEN": GITLAB_TOKEN}, timeout=15,
+    )
+    if not resp.is_success: return []
+    return [m for m in resp.json()
+            if str(m.get("source_branch","")).startswith("shiftleft/")]
 
-with st.spinner("Loading pull requests…"):
-    try:
-        prs = list_shiftleft_prs(GITHUB_TARGET_REPO, state=pr_state)[:max_prs]
-    except Exception as e:
-        st.error(f"GitHub API error: {e}")
-        prs = []
+with st.spinner("Loading…"):
+    try: mrs = _load_mrs(project_input, mr_state)
+    except Exception as e: st.error(str(e)); mrs = []
 
-if not prs:
-    st.info("No ShiftLeft pull requests found.")
+if not mrs:
+    st.info("No ShiftLeft MRs yet. Trigger a run above.")
 else:
-    for pr in prs:
-        c1, c2, c3, c4 = st.columns([3, 1, 1, 2])
-        c1.markdown(f"**[#{pr['number']} {pr['title'][:60]}]({pr['url']})**")
-        badge_color = "green" if pr["state"] == "open" else "gray"
-        c2.markdown(f":{badge_color}[{pr['state']}]")
-        c3.caption(pr["created"][:10])
-        vsc = f"https://vscode.dev/github/{GITHUB_TARGET_REPO}/pull/{pr['number']}"
-        c4.link_button("Open in VS Code ↗", vsc)
+    for mr in mrs:
+        c1,c2,c3,c4 = st.columns([4,1,1,2])
+        c1.markdown(f"**[!{mr['iid']} {mr['title'][:60]}]({mr['web_url']})**")
+        color = "green" if mr["state"]=="opened" else "gray"
+        c2.markdown(f":{color}[{mr['state']}]")
+        c3.caption((mr.get("created_at",""))[:10])
+        c4.link_button("Open ↗", mr["web_url"])

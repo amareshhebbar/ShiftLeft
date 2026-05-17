@@ -1,30 +1,29 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="ShiftLeft",
-    page_icon="🔍",
-    layout="wide",
+    page_title="ShiftLeft", page_icon="⚡", layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.sidebar.title("🔍 ShiftLeft")
-st.sidebar.caption("Autonomous open-source checker")
-st.sidebar.divider()
-st.sidebar.page_link("ui/app.py",                  label="🏠  Home")
-st.sidebar.page_link("ui/pages/01_dashboard.py",   label="📊  Dashboard")
-st.sidebar.page_link("ui/pages/02_review.py",      label="🔀  Review changes")
-st.sidebar.page_link("ui/pages/03_scheduler.py",   label="⏱   Scheduler")
-
-st.title("ShiftLeft")
+st.title("⚡ ShiftLeft")
+st.markdown("### Autonomous Bug-Fixing Agent for GitLab")
 st.markdown("""
-**Autonomous open-source code intelligence.**
+ShiftLeft reads any GitLab repository, finds the highest-impact bug using **Gemini 2.5 Flash**,
+writes a fix, validates it, and opens a **Merge Request** — without a human writing a single line of code.
+""")
 
-ShiftLeft monitors your GitHub repository, triages code quality issues with Gemini AI,
-generates verified patches, and opens Pull Requests — automatically.
+st.divider()
+col1, col2, col3 = st.columns(3)
+col1.metric("Agents", "5", help="Cartographer → Triage → Coder → Auditor → HITL")
+col2.metric("LLM", "Gemini 2.5 Flash", help="1M token context window")
+col3.metric("Integration", "GitLab MCP", help="Branch creation via MCP protocol")
+st.divider()
 
+st.markdown("""
 | Page | What it does |
 |---|---|
-| 📊 Dashboard | View run history, open PRs, and trigger a new run |
-| 🔀 Review changes | Accept, reject, or open individual file diffs in VS Code |
-| ⏱ Scheduler | Configure automated nightly runs via Cloud Scheduler |
+| 📊 **Dashboard** | Trigger a run, view recent GitLab MRs |
+| 🔀 **Review MR** | See the diff, open MR on GitLab |
+| ⏱ **Scheduler** | Configure automated nightly runs |
 """)
+st.info("👉 Go to **Dashboard** in the sidebar to trigger your first run.", icon="🚀")

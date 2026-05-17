@@ -1,86 +1,79 @@
-
+import os, sys
+import httpx
 import streamlit as st
-from tools.github_tools import (
-    list_shiftleft_prs,
-    get_pr_diff,
-    get_file_content,
-    accept_incoming,
-    reject_file,
-)
-from utils.config import GITHUB_TARGET_REPO
 
-st.title("🔀 Review changes")
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-# ── select PR ──────────────────────────────────────────────────────────────
-with st.spinner("Fetching open ShiftLeft PRs…"):
-    try:
-        open_prs = list_shiftleft_prs(GITHUB_TARGET_REPO, state="open")
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+def _get(key, default=""):
+    try: return st.secrets[key]
+    except Exception: return os.environ.get(key, default)
 
-if not open_prs:
-    st.info("No open ShiftLeft PRs to review right now.")
+GITLAB_TOKEN   = _get("GITLAB_TOKEN")
+GITLAB_URL     = _get("GITLAB_URL", "https://gitlab.com")
+GITLAB_PROJECT = _get("GITLAB_TARGET_PROJECT", "")
+
+st.set_page_config(page_title="Review MR — ShiftLeft", page_icon="🔀", layout="wide")
+st.title("🔀 Review Merge Request")
+
+project = st.text_input("GitLab project", value=GITLAB_PROJECT)
+
+def _get_mrs(project):
+    enc = project.replace("/", "%2F")
+    resp = httpx.get(
+        f"{GITLAB_URL}/api/v4/projects/{enc}/merge_requests",
+        params={"state": "opened", "per_page": 20},
+        headers={"PRIVATE-TOKEN": GITLAB_TOKEN}, timeout=15,
+    )
+    resp.raise_for_status()
+    return [m for m in resp.json()
+            if str(m.get("source_branch","")).startswith("shiftleft/")]
+
+def _get_changes(project, iid):
+    enc = project.replace("/", "%2F")
+    resp = httpx.get(
+        f"{GITLAB_URL}/api/v4/projects/{enc}/merge_requests/{iid}/changes",
+        headers={"PRIVATE-TOKEN": GITLAB_TOKEN}, timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("changes", [])
+
+with st.spinner("Fetching open ShiftLeft MRs…"):
+    try: mrs = _get_mrs(project)
+    except Exception as e: st.error(str(e)); st.stop()
+
+if not mrs:
+    st.info("No open ShiftLeft MRs. Trigger a run from Dashboard.")
     st.stop()
 
-options = {f"#{p['number']} — {p['title'][:70]}": p for p in open_prs}
-choice  = st.selectbox("Select a PR to review", list(options.keys()))
-pr      = options[choice]
+options = {f"!{m['iid']} — {m['title'][:70]}": m for m in mrs}
+choice  = st.selectbox("Select MR", list(options.keys()))
+mr      = options[choice]
 
-st.markdown(
-    f"**Branch:** `{pr['branch']}` → `main`  |  "
-    f"[View on GitHub]({pr['url']})"
-)
-
-vsc_url = f"https://vscode.dev/github/{GITHUB_TARGET_REPO}/pull/{pr['number']}"
-st.link_button("🖥  Open entire PR in VS Code", vsc_url, type="primary")
-
+st.markdown(f"**Branch:** `{mr['source_branch']}` → `{mr['target_branch']}`")
+st.link_button("🌐 Open on GitLab", mr["web_url"], type="primary")
 st.divider()
 
-# ── load diffs ─────────────────────────────────────────────────────────────
-with st.spinner("Fetching file diffs…"):
-    try:
-        diffs = get_pr_diff(GITHUB_TARGET_REPO, pr["number"])
-    except Exception as e:
-        st.error(f"Could not fetch diffs: {e}")
-        st.stop()
+with st.spinner("Loading diffs…"):
+    try: changes = _get_changes(project, mr["iid"])
+    except Exception as e: st.error(str(e)); st.stop()
 
-if not diffs:
-    st.info("No file changes found in this PR.")
-    st.stop()
+source = [c for c in changes if not c.get("new_path","").startswith(".shiftleft/")]
+yamls  = [c for c in changes if c.get("new_path","").startswith(".shiftleft/")]
+show_yaml = st.checkbox(f"Show .shiftleft/ manifests ({len(yamls)} files)", value=False)
+all_changes = source + (yamls if show_yaml else [])
 
-st.caption(f"{len(diffs)} file(s) changed in this PR.")
+st.caption(f"{len(source)} source file(s) changed · {len(yamls)} manifest(s)")
 
-# ── per-file cards ─────────────────────────────────────────────────────────
-for filename, diff_text in diffs.items():
-    with st.expander(f"📄 `{filename}`", expanded=False):
-        additions = diff_text.count("\n+") - diff_text.count("\n+++")
-        removals  = diff_text.count("\n-") - diff_text.count("\n---")
-        st.caption(f"+{additions} additions   -{removals} removals")
-        st.code(diff_text, language="diff", line_numbers=False)
-
-        col1, col2, col3 = st.columns(3)
-
-        if col1.button("✅ Accept incoming", key=f"acc_{filename}",
-                       help="Keep the agent's version of this file"):
-            with st.spinner("Accepting…"):
-                accept_incoming(GITHUB_TARGET_REPO, pr["branch"], filename)
-            st.success(f"Accepted agent changes to `{filename}`")
-
-        if col2.button("❌ Reject (restore original)", key=f"rej_{filename}",
-                       help="Revert this file to the main branch version"):
-            with st.spinner("Reverting…"):
-                try:
-                    reject_file(GITHUB_TARGET_REPO, pr["branch"], filename)
-                    st.warning(f"Reverted `{filename}` to original.")
-                except Exception as e:
-                    st.error(str(e))
-
-        file_vsc = (
-            f"https://vscode.dev/github/{GITHUB_TARGET_REPO}"
-            f"/pull/{pr['number']}"
-        )
-        if col3.button("🖥  Edit in VS Code", key=f"vsc_{filename}"):
-            st.markdown(
-                f"[Click to open VS Code merge editor for `{filename}`]({file_vsc})"
-            )
+for change in all_changes:
+    path = change.get("new_path") or change.get("old_path","?")
+    diff = change.get("diff","")
+    added   = diff.count("\n+") - diff.count("\n+++")
+    removed = diff.count("\n-") - diff.count("\n---")
+    icon = "📋" if path.startswith(".shiftleft/") else "📄"
+    with st.expander(f"{icon} `{path}`  (+{added} / -{removed})",
+                     expanded=not path.startswith(".shiftleft/")):
+        if diff: st.code(diff, language="diff")
+        else: st.caption("(empty diff)")
+        st.link_button("View on GitLab ↗", mr["web_url"] + "/diffs")
