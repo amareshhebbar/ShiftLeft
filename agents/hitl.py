@@ -186,9 +186,11 @@ def hitl(state: ShiftLeftState) -> ShiftLeftState:
     # The target repo's own CI would fail because we only patch one file,
     # not the full test suite. This keeps the MR green.
     ci_skip_yaml = """# ShiftLeft automated branch — CI skipped.
-# The fix targets a single file; full integration tests run on merge.
+# Full integration tests run on merge to main, not on AI patch branches.
 workflow:
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
     - if: $CI_COMMIT_BRANCH =~ /^shiftleft\//
       when: never
     - when: always

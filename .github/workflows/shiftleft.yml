@@ -1,6 +1,6 @@
 name: ShiftLeft scheduled check
 on:
-  workflow_dispatch:    # manual trigger only — no auto schedule until webhook URL is set
+  workflow_dispatch:   
 
 jobs:
   trigger:

@@ -21,7 +21,7 @@ os.environ["GITLAB_TOKEN"]          = GITLAB_TOKEN
 os.environ["GITLAB_URL"]            = GITLAB_URL
 os.environ["GITLAB_TARGET_PROJECT"] = GITLAB_PROJECT
 os.environ["GEMINI_API_KEY"]        = _get("GEMINI_API_KEY")
-os.environ["GEMINI_MODEL"]          = _get("GEMINI_MODEL", "gemini-2.5-flash")
+os.environ["GEMINI_MODEL"]          = _get("GEMINI_MODEL", "gemini-3.1-pro")
 
 st.set_page_config(page_title="Dashboard — ShiftLeft", layout="wide")
 st.title("Dashboard")

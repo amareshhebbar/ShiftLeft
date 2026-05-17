@@ -33,7 +33,7 @@ Create `.env` in the project root:
 ```dotenv
 # Required
 GEMINI_API_KEY="AIza..."
-GEMINI_MODEL="gemini-2.5-flash"
+GEMINI_MODEL="gemini-3.1-pro"
 
 GITLAB_TOKEN="glpat-..."
 GITLAB_URL="https://gitlab.com"
@@ -187,7 +187,7 @@ python test_pipeline.py --no-issues
 | Error                               | Fix                                                                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `npx not found`                     | `sudo dnf install nodejs` or `sudo apt install nodejs npm`                                       |
-| `GEMINI_MODEL looks wrong`          | Must be exactly `gemini-2.5-flash`                                                               |
+| `GEMINI_MODEL looks wrong`          | Must be exactly `gemini-3.1-pro`                                                               |
 | `GITLAB_TARGET_PROJECT looks wrong` | Must be `user/repo` — no `https://` prefix                                                       |
 | `MCP handshake timed out`           | Run `GITLAB_PERSONAL_ACCESS_TOKEN=glpat-... npx -y @modelcontextprotocol/server-gitlab` manually |
 | `GitLab commit 403`                 | Token needs `write_repository` scope                                                             |
