@@ -1,6 +1,6 @@
 import streamlit as st
 
-st.set_page_config(page_title="Scheduler — ShiftLeft", page_icon="⏱", layout="wide")
+st.set_page_config(page_title="Scheduler — ShiftLeft", layout="wide")
 st.title("⏱ Scheduler")
 st.markdown("Configure automated ShiftLeft runs via **Google Cloud Scheduler**.")
 
@@ -13,7 +13,7 @@ preset = st.selectbox("Preset", list(PRESETS.keys()))
 cron   = st.text_input("Cron expression", value=PRESETS[preset])
 job_id = st.text_input("Job name", value="shiftleft-nightly")
 
-if st.button("💾 Save schedule", type="primary"):
+if st.button("Save schedule", type="primary"):
     st.info(
         f"Schedule `{cron}` saved as `{job_id}`.\n\n"
         "To activate: set `GCP_PROJECT_ID` and `CLOUD_RUN_URL` in secrets, "

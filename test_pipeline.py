@@ -223,7 +223,7 @@ if args.step == "carto":
 
 
 # ── Step 2: Triage ────────────────────────────────────────────────────────────
-hdr("STEP 2 — Triage  (Gemini 2.5 Flash identifies the bug)")
+hdr("STEP 2 — Triage  (Gemini 3.1 Pro identifies the bug)")
 
 from agents.triage import triage
 state = run_agent(2, TOTAL_STEPS, "triage", triage, state)
@@ -237,7 +237,7 @@ if args.step == "triage":
 
 
 # ── Step 3: Coder ─────────────────────────────────────────────────────────────
-hdr("STEP 3 — Coder  (Gemini 2.5 Flash writes the fix)")
+hdr("STEP 3 — Coder  (Gemini 3.1 Pro writes the fix)")
 
 from agents.coder import coder
 state = run_agent(3, TOTAL_STEPS, "coder", coder, state)

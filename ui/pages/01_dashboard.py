@@ -7,7 +7,6 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# Load secrets (Streamlit Cloud puts them in st.secrets)
 def _get(key, default=""):
     try:
         return st.secrets[key]
@@ -24,8 +23,8 @@ os.environ["GITLAB_TARGET_PROJECT"] = GITLAB_PROJECT
 os.environ["GEMINI_API_KEY"]        = _get("GEMINI_API_KEY")
 os.environ["GEMINI_MODEL"]          = _get("GEMINI_MODEL", "gemini-2.5-flash")
 
-st.set_page_config(page_title="Dashboard — ShiftLeft", page_icon="📊", layout="wide")
-st.title("📊 Dashboard")
+st.set_page_config(page_title="Dashboard — ShiftLeft", layout="wide")
+st.title("Dashboard")
 
 # ── Trigger ────────────────────────────────────────────────────────────────
 st.subheader("Trigger a run")
@@ -61,7 +60,7 @@ if st.button("▶  Run ShiftLeft now", type="primary"):
     if "last_result" in st.session_state:
         mr_url = st.session_state["last_result"].get("pr_url", "")
         if mr_url:
-            st.success(f"✅ MR created: [{mr_url}]({mr_url})")
+            st.success(f"MR created: [{mr_url}]({mr_url})")
             st.balloons()
         else:
             st.warning("Done — no MR URL returned. Check logs.")

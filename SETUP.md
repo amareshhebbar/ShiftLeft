@@ -1,147 +1,106 @@
-# ShiftLeft — Developer Setup & Testing Guide
-
-## Full `.env` reference
-
-```dotenv
-# ── Gemini ──────────────────────────────────────────────────
-GEMINI_API_KEY="AIzaSy..."
-GEMINI_MODEL="gemini-2.5-flash"          # must be exactly this string
-
-# ── GitLab ──────────────────────────────────────────────────
-GITLAB_TOKEN="glpat-..."                 # needs: api, read_repository, write_repository
-GITLAB_URL="https://gitlab.com"
-GITLAB_MCP_URL="https://gitlab.com/api/v4/mcp"   # not used currently (npm fallback)
-GITLAB_TARGET_PROJECT="youruser/yourrepo"         # NO https://, just the path
-
-# ── Google Cloud (optional — for Cloud Run / Scheduler) ─────
-GCP_PROJECT_ID="shiftleft-hackathon-xxxxx"
-GCP_REGION="us-central1"
-GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-
-# ── Webhook (optional — for Cloud Run mode) ─────────────────
-WEBHOOK_SECRET="some-random-secret"
-CLOUD_RUN_URL="https://your-cloud-run-url.run.app"
-
-# ── LangSmith tracing (optional) ────────────────────────────
-LANGCHAIN_TRACING_V2="true"
-LANGCHAIN_API_KEY="ls__..."
-LANGCHAIN_PROJECT="shiftleft-dev"
-```
+# ShiftLeft — Setup, Testing & Demo Guide
 
 ---
 
-## One-time setup
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+ (`node --version` to check)
+- GitLab account with a Personal Access Token
+- Google Gemini API key (free at [aistudio.google.com](https://aistudio.google.com))
+
+---
+
+## 1. Install
 
 ```bash
-# 1. Clone
 git clone https://github.com/gvamaresh/shiftleft
 cd shiftleft
-
-# 2. Python env
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Node (for GitLab MCP server)
+# GitLab MCP server (one-time)
 npm install -g @modelcontextprotocol/server-gitlab
-
-# 4. Copy and fill .env
-cp .env.example .env
-nano .env   # fill in GEMINI_API_KEY and GITLAB_TOKEN at minimum
-
-# 5. Verify everything
-python diagnose.py
-# Must show: ALL CHECKS PASSED ✅
 ```
 
 ---
 
-## Running the pipeline
+## 2. Configure `.env`
 
-### Option A — Quick full run (recommended for demo)
+Create `.env` in the project root:
+
+```dotenv
+# Required
+GEMINI_API_KEY="AIza..."
+GEMINI_MODEL="gemini-2.5-flash"
+
+GITLAB_TOKEN="glpat-..."
+GITLAB_URL="https://gitlab.com"
+GITLAB_TARGET_PROJECT="youruser/yourrepo"
+
+# Optional — LangSmith tracing
+LANGCHAIN_TRACING_V2="true"
+LANGCHAIN_API_KEY="ls__..."
+LANGCHAIN_PROJECT="shiftleft-dev"
+
+# Optional — Cloud Run webhook
+CLOUD_RUN_URL="https://your-cloud-run-url.run.app"
+```
+
+**GitLab token scopes needed** (create at `gitlab.com/-/user_settings/personal_access_tokens`):
+
+| Scope              | Why                       |
+| ------------------ | ------------------------- |
+| `api`              | Full API + MCP access     |
+| `read_repository`  | Read file contents        |
+| `write_repository` | Push commits and branches |
+
+---
+
+---
+
+## 3. Run the pipeline
+
+### One command — full run
 
 ```bash
 python main.py
 ```
 
-What happens:
-1. Reads your `GITLAB_TARGET_PROJECT` from `.env`
-2. Maps the repo (30-45s depending on size)
-3. Triages bugs with Gemini (~5s)
-4. Generates fix (~10s)
-5. Validates syntax (~1s)
-6. Creates branch + commits + opens MR (~10s)
-7. Prints the MR URL
-
-### Option B — Test runner with demo issues
-
-```bash
-# Full run — creates 3 demo issues first, then runs all 5 agents
-python test_pipeline.py
-
-# Only create the 3 demo issues (run this before recording video)
-python test_pipeline.py --issues
-
-# Run pipeline without creating issues (issues already exist)
-python test_pipeline.py --no-issues
-
-# Debug individual agents:
-python test_pipeline.py --step carto    # stop after cartographer
-python test_pipeline.py --step triage   # stop after triage (see what Gemini picked)
-python test_pipeline.py --step coder    # stop after coder (see the diff)
-python test_pipeline.py --step auditor  # stop after auditor (see test results)
-```
-
-### Option C — Against a different repo
+Against a different repo:
 
 ```bash
 python main.py --repo someuser/some-other-gitlab-repo
 ```
 
-### Option D — Streamlit dashboard
+### Streamlit dashboard
 
 ```bash
 streamlit run ui/app.py
 # Opens http://localhost:8501
 ```
 
-### Option E — Webhook server (Cloud Run)
+### Webhook server (Cloud Run mode)
 
 ```bash
 python main.py --serve
-# Listens on :8080 for GitLab webhook events
+# Listens on :8080
 ```
 
 ---
 
-## Pre-demo checklist (before recording video)
+## 4. Testing with fake issues (demo setup)
+
+Use `test_pipeline.py` — it never touches `main.py` and gives verbose step-by-step output.
+
+### Step A — Create the 3 demo issues on GitLab
 
 ```bash
-# 1. Delete old test branches from GitLab
-#    gitlab.com/youruser/yourrepo/-/branches
-#    Delete all shiftleft/run-* branches
-
-# 2. Close any old MRs
-#    gitlab.com/youruser/yourrepo/-/merge_requests
-
-# 3. Make sure issues #1 #2 #3 are OPEN
-#    gitlab.com/youruser/yourrepo/-/issues
-
-# 4. Verify pipeline still works
-python test_pipeline.py --no-issues
-
-# 5. Check MR appeared on GitLab
-#    Open the URL that printed at the end
-
-# 6. Clean up that test run too (delete branch + close MR)
-#    Then you're ready to record the real demo
+python test_pipeline.py --issues
 ```
 
----
-
-## What the demo issues are
-
-ShiftLeft creates these 3 issues automatically on first run:
+This creates these 3 real issues on your `GITLAB_TARGET_PROJECT`:
 
 ```
 #1 Missing error handling in http module when connection times out
@@ -149,57 +108,88 @@ ShiftLeft creates these 3 issues automatically on first run:
 #3 gl.projects.list() does not handle pagination edge cases
 ```
 
-These are real bugs in the python-gitlab library. Gemini consistently picks
-issue #2 (HTTP 429 retry) as highest severity and targets `requests_backend.py`.
+These are real bugs in the python-gitlab library. Gemini consistently picks **Issue #2** (HTTP 429 retry) as the highest severity and targets `gitlab/_backends/requests_backend.py`.
 
----
+### Step B — Run the full pipeline (issues already exist)
 
-## How the MCP integration works
+```bash
+python test_pipeline.py --no-issues
+```
 
-The GitLab MCP server (`@modelcontextprotocol/server-gitlab`) is launched as a
-subprocess using JSON-RPC over stdio. ShiftLeft uses it for:
-
-| Operation | Transport | Why |
-|---|---|---|
-| `create_branch` | MCP | Works reliably |
-| `list_available_tools` | MCP | Handshake / discovery |
-| `get_file_contents` | MCP → REST fallback | MCP 404s on some paths |
-| `list_issues` | REST | Not exposed by npm package |
-| `get_repository_tree` | REST | Not exposed by npm package |
-| `push files / commit` | REST | MCP has JS bug (`.map()` on undefined) |
-| `create_merge_request` | REST | More reliable than MCP |
-
-All write operations that matter for the demo story go through the MCP layer
-(branch creation). File commits use the GitLab Commits REST API.
-
----
-
-## Troubleshooting
-
-| Error | Fix |
-|---|---|
-| `npx not found` | Install Node.js: `sudo dnf install nodejs` |
-| `MCP handshake timed out` | Run `npx -y @modelcontextprotocol/server-gitlab` manually to see error |
-| `GEMINI_MODEL looks wrong` | Must be exactly `gemini-2.5-flash` in `.env` |
-| `GITLAB_TARGET_PROJECT looks wrong` | Must be `user/repo` not `https://gitlab.com/user/repo` |
-| `GitLab commit 403` | Token needs `write_repository` scope |
-| `FutureWarning google.generativeai` | Safe to ignore — package still works |
-| Triage picks `docs/conf.py` | Outdated triage.py — copy latest from repo |
-
----
-
-## File purposes
+Output you'll see:
 
 ```
-main.py              CLI entry — runs pipeline via LangGraph graph
-test_pipeline.py     Safe e2e test — same pipeline, verbose output, --step debug
-diagnose.py          Pre-flight checks (env, imports, MCP, Gemini, state, agents)
-agents/cartographer  Maps repo: REST tree + MCP file reads + REST issues + YAML docs
-agents/triage        Gemini picks highest-severity bug from file map + issues
-agents/coder         Gemini writes complete fixed file + computes unified diff  
-agents/auditor       py_compile syntax check + optional pytest run
-agents/hitl          MCP branch + REST commit batches + REST MR creation
-core/graph           LangGraph wiring: 5 nodes + conditional retry edge
-core/state           TypedDict schema for all 20 state fields
-tools/gitlab_mcp_tools   Subprocess MCP client + REST helpers (tree, issues, file)
+STEP 0 — skipped (--no-issues)
+STEP 1 — Cartographer: 32 files mapped, 3 issues loaded
+STEP 2 — Triage: severity=HIGH, target=gitlab/_backends/requests_backend.py
+STEP 3 — Coder: +12 lines added (retry logic with urllib3.Retry)
+STEP 4 — Auditor: PASSED (syntax OK)
+STEP 5 — HITL: branch created, 36 files committed, MR opened
+
+MR URL: https://gitlab.com/youruser/yourrepo/-/merge_requests/N
 ```
+
+### Step C — Debug individual agents
+
+```bash
+python test_pipeline.py --step carto    # stop after cartographer — see what files mapped
+python test_pipeline.py --step triage   # stop after triage — see what Gemini picked
+python test_pipeline.py --step coder    # stop after coder — see the full diff
+python test_pipeline.py --step auditor  # stop after auditor — see syntax check result
+# no --step flag = run all 5 agents through to MR creation
+```
+
+---
+
+## 5. Pre-demo checklist (before recording video)
+
+```bash
+# 1. Delete old test branches
+#    gitlab.com/youruser/yourrepo/-/branches
+#    Delete all: shiftleft/run-*
+
+# 2. Close old MRs
+#    gitlab.com/youruser/yourrepo/-/merge_requests
+#    Close MR #1 and any others
+
+# 3. Confirm issues #1 #2 #3 are OPEN
+#    gitlab.com/youruser/yourrepo/-/issues
+
+# 4. Do one clean test run
+python test_pipeline.py --no-issues
+
+# 5. Verify MR appeared on GitLab — open the URL printed at the end
+
+# 6. Clean up that run too (delete branch + close MR)
+
+# Now record the real demo
+```
+
+---
+
+## 6. What the demo shows
+
+1. **GitLab issues tab** — 3 open bugs, nobody has fixed them
+2. **Terminal** — `python main.py` — logs stream live
+3. **Cartographer** — "32 Python files mapped via GitLab MCP"
+4. **Triage** — "Gemini picked Issue #2, severity HIGH"
+5. **Coder** — "Fix written — 12 lines added"
+6. **Auditor** — "Syntax OK, tests passed"
+7. **HITL** — "Branch created via MCP, MR opened"
+8. **GitLab MR page** — real unified diff, Changes tab
+9. **`.shiftleft/` folder** — 34 YAML files documenting the codebase
+10. **Audit log** — `.shiftleft/audits/YYYY-MM-DD_HHMMSS.yaml`
+
+---
+
+## 7. Troubleshooting
+
+| Error                               | Fix                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `npx not found`                     | `sudo dnf install nodejs` or `sudo apt install nodejs npm`                                       |
+| `GEMINI_MODEL looks wrong`          | Must be exactly `gemini-2.5-flash`                                                               |
+| `GITLAB_TARGET_PROJECT looks wrong` | Must be `user/repo` — no `https://` prefix                                                       |
+| `MCP handshake timed out`           | Run `GITLAB_PERSONAL_ACCESS_TOKEN=glpat-... npx -y @modelcontextprotocol/server-gitlab` manually |
+| `GitLab commit 403`                 | Token needs `write_repository` scope                                                             |
+| `FutureWarning google.generativeai` | Safe to ignore — package still works                                                             |
+| Triage picks `docs/conf.py`         | You have an old `triage.py` — pull latest from repo                                              |

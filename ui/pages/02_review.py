@@ -14,8 +14,8 @@ GITLAB_TOKEN   = _get("GITLAB_TOKEN")
 GITLAB_URL     = _get("GITLAB_URL", "https://gitlab.com")
 GITLAB_PROJECT = _get("GITLAB_TARGET_PROJECT", "")
 
-st.set_page_config(page_title="Review MR — ShiftLeft", page_icon="🔀", layout="wide")
-st.title("🔀 Review Merge Request")
+st.set_page_config(page_title="Review MR — ShiftLeft", layout="wide")
+st.title("Review Merge Request")
 
 project = st.text_input("GitLab project", value=GITLAB_PROJECT)
 
@@ -52,7 +52,7 @@ choice  = st.selectbox("Select MR", list(options.keys()))
 mr      = options[choice]
 
 st.markdown(f"**Branch:** `{mr['source_branch']}` → `{mr['target_branch']}`")
-st.link_button("🌐 Open on GitLab", mr["web_url"], type="primary")
+st.link_button("Open on GitLab", mr["web_url"], type="primary")
 st.divider()
 
 with st.spinner("Loading diffs…"):
@@ -71,8 +71,7 @@ for change in all_changes:
     diff = change.get("diff","")
     added   = diff.count("\n+") - diff.count("\n+++")
     removed = diff.count("\n-") - diff.count("\n---")
-    icon = "📋" if path.startswith(".shiftleft/") else "📄"
-    with st.expander(f"{icon} `{path}`  (+{added} / -{removed})",
+    with st.expander(f"`{path}`  (+{added} / -{removed})",
                      expanded=not path.startswith(".shiftleft/")):
         if diff: st.code(diff, language="diff")
         else: st.caption("(empty diff)")
