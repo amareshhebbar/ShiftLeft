@@ -1,13 +1,3 @@
-"""
-agents/hitl.py
-
-Creates branch (via GitLab MCP) → pushes files (via GitLab REST API) → opens MR (via REST).
-
-Why REST for push/MR: the @modelcontextprotocol/server-gitlab npm package has a
-JavaScript bug in push_files and create_or_update_file (`.map()` on undefined).
-create_branch works fine via MCP, so we keep that for the MCP integration story.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -33,7 +23,6 @@ def _headers() -> Dict[str, str]:
 
 
 def _existing_paths(project: str, ref: str) -> Set[str]:
-    """Return the set of all file paths that exist in `ref` (for action=create vs update)."""
     enc = project.replace("/", "%2F")
     url = f"{GITLAB_URL}/api/v4/projects/{enc}/repository/tree"
     params: Dict[str, Any] = {"recursive": "true", "per_page": 100, "ref": ref}
@@ -62,11 +51,6 @@ def _push_commit(
     message: str,
     existing: Set[str],
 ) -> Dict:
-    """
-    Push files to a branch via GitLab Commits REST API.
-    Automatically selects action='create' vs 'update' based on `existing` set.
-    Batches into _COMMIT_BATCH actions per request.
-    """
     enc = project.replace("/", "%2F")
     url = f"{GITLAB_URL}/api/v4/projects/{enc}/repository/commits"
 
@@ -95,8 +79,6 @@ def _push_commit(
             raise RuntimeError(
                 f"GitLab commit API error {resp.status_code}: {resp.text[:400]}"
             )
-
-        # After first commit, these files now exist in the branch
         for f in batch:
             existing.add(f["file_path"])
 
@@ -182,9 +164,6 @@ def hitl(state: ShiftLeftState) -> ShiftLeftState:
             diff_hunks.append({"file": fp, "diff": patch.get("diff", "")})
             log.info(f"hitl — source patch: {fp}")
 
-    # Push a .gitlab-ci.yml that skips CI on ShiftLeft branches.
-    # The target repo's own CI would fail because we only patch one file,
-    # not the full test suite. This keeps the MR green.
     ci_skip_yaml = """# ShiftLeft automated branch — CI skipped.
 # Full integration tests run on merge to main, not on AI patch branches.
 workflow:

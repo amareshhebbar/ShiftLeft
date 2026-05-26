@@ -1,10 +1,3 @@
-"""
-agents/triage.py — Bug triage agent.
-
-Sends the codebase map + open GitLab issues to Gemini (via Vertex AI)
-and picks the single highest-severity bug to fix.
-"""
-
 from __future__ import annotations
 
 import json
