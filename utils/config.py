@@ -3,30 +3,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 def _require(key: str) -> str:
-    val = os.getenv(key)
+    val = os.getenv(key, "").strip()
     if not val:
         raise EnvironmentError(
             f"Required env var '{key}' is not set. "
-            f"Check your .env file against .env.example."
+            f"Add it to your .env file."
         )
     return val
 
-GEMINI_API_KEY  = _require("GEMINI_API_KEY")
-GEMINI_MODEL    = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+def _optional(key: str, default: str = "") -> str:
+    return os.getenv(key, default).strip()
 
-GITHUB_TOKEN        = _require("GITHUB_TOKEN")
-GITHUB_TARGET_REPO  = os.getenv("GITHUB_TARGET_REPO", "")
-DEFAULT_BASE_BRANCH = os.getenv("DEFAULT_BASE_BRANCH", "main")
 
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
-GCP_REGION     = os.getenv("GCP_REGION", "us-central1")
+# ── Google Cloud / Vertex AI ─────────────────────────────────────────────────
+GCP_PROJECT_ID = _optional("GCP_PROJECT_ID", "")
+GCP_REGION     = _optional("GCP_REGION", "us-central1")
+GEMINI_MODEL   = _optional("GEMINI_MODEL", "gemini-3.1-pro")
 
-WEBHOOK_SECRET  = os.getenv("WEBHOOK_SECRET", "change-me-in-production")
-CLOUD_RUN_URL   = os.getenv("CLOUD_RUN_URL", "http://localhost:8080")
-SEARXNG_URL     = os.getenv("SEARXNG_URL", "http://localhost:8080")
+# AI Studio key — fallback only when GCP_PROJECT_ID is absent
+GEMINI_API_KEY = _optional("GEMINI_API_KEY", "")
 
-GITLAB_TOKEN          = os.getenv("GITLAB_TOKEN", "")
-GITLAB_URL            = os.getenv("GITLAB_URL", "https://gitlab.com")
-GITLAB_MCP_URL        = os.getenv("GITLAB_MCP_URL", "https://gitlab.com/api/v4/mcp")
-GITLAB_TARGET_PROJECT = os.getenv("GITLAB_TARGET_PROJECT", "")
+# ── GitLab ───────────────────────────────────────────────────────────────────
+GITLAB_TOKEN          = _require("GITLAB_TOKEN")
+GITLAB_URL            = _optional("GITLAB_URL", "https://gitlab.com")
+GITLAB_TARGET_PROJECT = _optional("GITLAB_TARGET_PROJECT", "")
+
+# ── Arize Phoenix (observability — enables Arize prize track) ─────────────────
+ARIZE_API_KEY    = _optional("ARIZE_API_KEY", "")
+PHOENIX_ENDPOINT = _optional("PHOENIX_ENDPOINT", "https://app.phoenix.arize.com")
+
+# ── Cloud Run / Webhook ──────────────────────────────────────────────────────
+WEBHOOK_SECRET = _optional("WEBHOOK_SECRET", "change-me-in-production")
+CLOUD_RUN_URL  = _optional("CLOUD_RUN_URL", "http://localhost:8080")
