@@ -1,0 +1,22 @@
+# scripts/benchmark_repos.yaml
+#
+# Repos included in the ShiftLeft benchmark suite.
+# Pass with: python scripts/benchmark.py --config scripts/benchmark_repos.yaml
+#
+# Fields:
+#   project        (required) — GitLab path: "user/repo"
+#   description    (optional) — label for the results table
+#   expected_file  (optional) — exact path you expect triage to target
+#                               (used to calculate triage accuracy %)
+#   expected_topic (optional) — keyword expected in issue_summary (fallback)
+
+- project: "amareshhebbar/python-gitlab-forktesting"
+  description: "python-gitlab — HTTP 429 retry logic"
+  expected_file: "gitlab/_backends/requests_backend.py"
+  expected_topic: "retry"
+
+# Add more repos below:
+# - project: "youruser/yourrepo"
+#   description: "short description of the known bug"
+#   expected_file: "path/to/expected/file.py"
+#   expected_topic: "keyword in triage summary"
