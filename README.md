@@ -59,7 +59,7 @@
 
 <br/>
 
-[**▶ Watch Demo**](https://youtu.be/0qyFCHWVS6g) &nbsp;·&nbsp;
+[**▶ Watch Demo**]([https://youtu.be/0qyFCHWVS6g](https://youtu.be/vtxAohTLpK8?si=00jF_O9r92XhLNcK)) &nbsp;·&nbsp;
 [**Live MR Proof**](https://gitlab.com/amareshhebbar/python-gitlab-forktesting/-/merge_requests/2) &nbsp;·&nbsp;
 [**Live Dashboard**](https://shiftleft.streamlit.app) &nbsp;·&nbsp;
 [**Setup Guide**](SETUP.md)
